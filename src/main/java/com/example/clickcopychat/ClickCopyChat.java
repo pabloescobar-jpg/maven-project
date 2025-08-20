@@ -18,10 +18,9 @@ import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.events.PacketAdapter;
 import com.comphenix.protocol.events.PacketEvent;
 import com.comphenix.protocol.events.ListenerPriority;
-import com.comphenix.protocol.events.PacketAdapter.AdapterParameteters;
-import com.comphenix.protocol.events.PacketListener;
 import com.comphenix.protocol.events.PacketContainer;
 import com.comphenix.protocol.reflect.StructureModifier;
+import com.comphenix.protocol.wrappers.WrappedChatComponent;
 
 public final class ClickCopyChat extends JavaPlugin implements Listener {
     private ProtocolManager protocol;
@@ -29,7 +28,6 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
     @Override
     public void onEnable() {
         getServer().getPluginManager().registerEvents(this, this);
-        // Optional, but recommended
         if (getServer().getPluginManager().isPluginEnabled("ProtocolLib")) {
             protocol = ProtocolLibrary.getProtocolManager();
             registerPacketHook();
@@ -39,7 +37,7 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         }
     }
 
-    // 1) Player chat: wrap the active renderer (EssentialsChat etc.) and then decorate
+    // Player chat: wrap the active renderer (EssentialsChat, etc.) then decorate
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onAsyncChat(AsyncChatEvent event) {
         ChatRenderer original = event.renderer();
@@ -49,36 +47,48 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         });
     }
 
-    // 2) All other chat/system messages via ProtocolLib
+    // System/plugin messages via ProtocolLib
     private void registerPacketHook() {
-        PacketListener listener = new PacketAdapter(this,
-                ListenerPriority.NORMAL,
-                PacketType.Play.Server.SYSTEM_CHAT,   // system messages, broadcasts, many plugin sends
-                PacketType.Play.Server.PLAYER_CHAT    // signed/unsigned player chat variants
+        protocol.addPacketListener(new PacketAdapter(this, ListenerPriority.NORMAL,
+                // Only SYSTEM_CHAT — PLAYER_CHAT isn’t available in your ProtocolLib build
+                PacketType.Play.Server.SYSTEM_CHAT
         ) {
             @Override
             public void onPacketSending(PacketEvent event) {
                 PacketContainer packet = event.getPacket();
 
-                // Try Adventure Component fields first (1.19.4+ / 1.20+)
-                StructureModifier<Component> comps = packet.getModifier().withType(Component.class);
-                if (!comps.getValues().isEmpty()) {
-                    Component c = comps.read(0);
-                    if (c != null) comps.write(0, decorate(c));
-                    return;
+                // Try Adventure Component first (modern Paper)
+                StructureModifier<Component> adv = packet.getModifier().withType(Component.class);
+                if (!adv.getValues().isEmpty()) {
+                    Component c = adv.read(0);
+                    if (c != null) {
+                        adv.write(0, decorate(c));
+                        return;
+                    }
                 }
 
-                // Fallback: older wrappers may expose chat components differently;
-                // if nothing found, we just leave the packet alone.
+                // Fallback: WrappedChatComponent (older/compat path)
+                StructureModifier<WrappedChatComponent> wrap = packet.getModifier().withType(WrappedChatComponent.class);
+                if (!wrap.getValues().isEmpty()) {
+                    WrappedChatComponent wc = wrap.read(0);
+                    if (wc != null) {
+                        Component c = wc.getJson() != null
+                                ? WrappedChatComponent.fromJson(wc.getJson()).asComponent()
+                                : null;
+                        if (c != null) {
+                            Component out = decorate(c);
+                            wrap.write(0, WrappedChatComponent.fromJson(net.kyori.adventure.text.serializer.gson.GsonComponentSerializer.gson().serialize(out)));
+                        }
+                    }
+                }
             }
-        };
-        protocol.addPacketListener(listener);
+        });
     }
 
-    // Add copy-to-clipboard if it isn't already present
+    // Add copy-to-clipboard unless already present
     private Component decorate(Component rendered) {
         if (rendered == null) return null;
-        if (rendered.clickEvent() != null) return rendered; // don't override existing click handlers
+        if (rendered.clickEvent() != null) return rendered; // don’t override existing click handlers
         String plain = PlainTextComponentSerializer.plainText().serialize(rendered);
         return rendered
                 .clickEvent(ClickEvent.copyToClipboard(plain))
