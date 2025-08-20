@@ -40,6 +40,7 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
     @Override
     public void onEnable() {
         getServer().getPluginManager().registerEvents(this, this);
+        getLogger().info("ClickCopyChat " + getDescription().getVersion() + " enabling…");
 
         if (getServer().getPluginManager().isPluginEnabled("ProtocolLib")) {
             protocol = ProtocolLibrary.getProtocolManager();
@@ -59,7 +60,8 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
             Component out = decorateForce(rendered);
             if (debug) {
                 String plain = PlainTextComponentSerializer.plainText().serialize(out);
-                getLogger().info("[DEBUG] Renderer applied for " + (viewer instanceof Player p ? p.getName() : "viewer")
+                getLogger().info("[DEBUG] Renderer applied for "
+                        + (viewer instanceof Player p ? p.getName() : "viewer")
                         + " | len=" + plain.length() + " | preview=\"" + preview(plain) + "\"");
             }
             return out;
@@ -68,10 +70,12 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
 
     // === System / plugin messages (ProtocolLib) ===
     private void registerPacketHooks() {
-        // Find all PLAY->SERVER packets whose name includes "CHAT"
+        // Find all PLAY->SERVER packet types whose name includes "CHAT" and are supported
         List<PacketType> candidates = new ArrayList<>();
         for (PacketType t : PacketType.values()) {
-            if (t.getProtocol() == Protocol.PLAY && t.getSender() == Sender.SERVER) {
+            if (t.getProtocol() == Protocol.PLAY
+                    && t.getSender() == Sender.SERVER
+                    && t.isSupported()) {
                 String n = t.name().toUpperCase(Locale.ROOT);
                 if (n.contains("CHAT")) candidates.add(t);
             }
@@ -83,13 +87,13 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         }
 
         hooked = candidates;
-        protocol.addPacketListener(new PacketAdapter(this, ListenerPriority.NORMAL, candidates) {
+        protocol.addPacketListener(new PacketAdapter(this, ListenerPriority.NORMAL, candidates.toArray(new PacketType[0])) {
             @Override
             public void onPacketSending(PacketEvent event) {
                 PacketContainer packet = event.getPacket();
                 int touched = 0;
 
-                // 1) Adventure Components
+                // A) Adventure Components (some mappings expose these directly)
                 StructureModifier<Component> adv = packet.getModifier().withType(Component.class);
                 for (int i = 0; i < adv.size(); i++) {
                     Component c = adv.readSafely(i);
@@ -99,21 +103,22 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
                     }
                 }
 
-                // 2) Wrapped JSON chat components
-                StructureModifier<WrappedChatComponent> wrap = packet.getModifier().withType(WrappedChatComponent.class);
-                for (int i = 0; i < wrap.size(); i++) {
-                    WrappedChatComponent wc = wrap.readSafely(i);
+                // B) ProtocolLib chat components (reliable across 1.21.8 + PL 5.4.0)
+                StructureModifier<WrappedChatComponent> chats = packet.getChatComponents();
+                for (int i = 0; i < chats.size(); i++) {
+                    WrappedChatComponent wc = chats.readSafely(i);
                     if (wc != null && wc.getJson() != null) {
                         Component c = safeDeserialize(wc.getJson());
                         if (c != null) {
                             Component out = decorateForce(c);
-                            wrap.write(i, WrappedChatComponent.fromJson(GsonComponentSerializer.gson().serialize(out)));
+                            String jsonOut = GsonComponentSerializer.gson().serialize(out);
+                            chats.write(i, WrappedChatComponent.fromJson(jsonOut));
                             touched++;
                         }
                     }
                 }
 
-                // 3) Raw String fields (might be JSON or plain)
+                // C) Raw String fields (sometimes contain JSON/plain chat)
                 StructureModifier<String> strs = packet.getStrings();
                 for (int i = 0; i < strs.size(); i++) {
                     String s = strs.readSafely(i);
@@ -127,7 +132,8 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
 
                 if (debug && touched > 0) {
                     String who = (event.getPlayer() != null ? event.getPlayer().getName() : "viewer");
-                    getLogger().info("[DEBUG] " + event.getPacketType() + " modified for " + who + " | fields=" + touched);
+                    getLogger().info("[DEBUG] " + event.getPacketType()
+                            + " modified for " + who + " | fields=" + touched);
                 }
             }
         });
@@ -140,7 +146,7 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         catch (Throwable ignored) { return null; }
     }
 
-    // Force copy-to-clipboard on root + children
+    // Force copy-to-clipboard on root + all children
     private Component decorateForce(Component rendered) {
         if (rendered == null) return null;
         String plain = PlainTextComponentSerializer.plainText().serialize(rendered);
