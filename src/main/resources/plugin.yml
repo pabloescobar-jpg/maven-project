@@ -1,7 +1,14 @@
 name: ClickCopyChat
 main: com.example.clickcopychat.ClickCopyChat
-version: 1.0.2
+version: 1.0.3
 api-version: '1.21'
 author: you
 description: Make chat messages clickable to copy their content to clipboard.
 softdepend: [ProtocolLib, Essentials]
+commands:
+  cccdebug:
+    description: Toggle ClickCopyChat debug logs
+    permission: clickcopychat.debug
+permissions:
+  clickcopychat.debug:
+    default: op
