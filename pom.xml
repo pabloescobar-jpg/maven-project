@@ -16,13 +16,18 @@
   </properties>
 
   <repositories>
+    <!-- Paper API -->
     <repository>
       <id>papermc-repo</id>
       <url>https://repo.papermc.io/repository/maven-public/</url>
     </repository>
+    <!-- ProtocolLib repo (this is the one you were missing) -->
+    <repository>
+      <id>dmulloy2-repo</id>
+      <url>https://repo.dmulloy2.net/repository/public/</url>
+    </repository>
   </repositories>
 
-  <!-- This is the part you asked about -->
   <dependencies>
     <dependency>
       <groupId>io.papermc.paper</groupId>
@@ -34,7 +39,7 @@
     <dependency>
       <groupId>com.comphenix.protocol</groupId>
       <artifactId>ProtocolLib</artifactId>
-      <version>5.2.0</version> <!-- use the latest matching your MC version -->
+      <version>5.2.0</version>   <!-- compile against this -->
       <scope>provided</scope>
     </dependency>
   </dependencies>
