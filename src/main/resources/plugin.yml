@@ -1,0 +1,6 @@
+name: ClickCopyChat
+main: com.example.clickcopychat.ClickCopyChat
+version: 1.0.0
+api-version: '1.21'
+author: you
+description: Make chat messages clickable to copy their content to clipboard.
