@@ -6,6 +6,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
+import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -47,17 +48,16 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         });
     }
 
-    // System/plugin messages via ProtocolLib
+    // System / plugin messages via ProtocolLib
     private void registerPacketHook() {
         protocol.addPacketListener(new PacketAdapter(this, ListenerPriority.NORMAL,
-                // Only SYSTEM_CHAT — PLAYER_CHAT isn’t available in your ProtocolLib build
-                PacketType.Play.Server.SYSTEM_CHAT
+                PacketType.Play.Server.SYSTEM_CHAT   // modern path for broadcasts/command outputs/etc.
         ) {
             @Override
             public void onPacketSending(PacketEvent event) {
                 PacketContainer packet = event.getPacket();
 
-                // Try Adventure Component first (modern Paper)
+                // Try direct Adventure Component first (modern Paper mappings)
                 StructureModifier<Component> adv = packet.getModifier().withType(Component.class);
                 if (!adv.getValues().isEmpty()) {
                     Component c = adv.read(0);
@@ -67,18 +67,17 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
                     }
                 }
 
-                // Fallback: WrappedChatComponent (older/compat path)
-                StructureModifier<WrappedChatComponent> wrap = packet.getModifier().withType(WrappedChatComponent.class);
+                // Fallback: JSON-based chat component (older/compat path)
+                StructureModifier<WrappedChatComponent> wrap =
+                        packet.getModifier().withType(WrappedChatComponent.class);
                 if (!wrap.getValues().isEmpty()) {
                     WrappedChatComponent wc = wrap.read(0);
-                    if (wc != null) {
-                        Component c = wc.getJson() != null
-                                ? WrappedChatComponent.fromJson(wc.getJson()).asComponent()
-                                : null;
-                        if (c != null) {
-                            Component out = decorate(c);
-                            wrap.write(0, WrappedChatComponent.fromJson(net.kyori.adventure.text.serializer.gson.GsonComponentSerializer.gson().serialize(out)));
-                        }
+                    if (wc != null && wc.getJson() != null) {
+                        // decode JSON -> Adventure, decorate, encode back to JSON
+                        Component c = GsonComponentSerializer.gson().deserialize(wc.getJson());
+                        Component out = decorate(c);
+                        String jsonOut = GsonComponentSerializer.gson().serialize(out);
+                        wrap.write(0, WrappedChatComponent.fromJson(jsonOut));
                     }
                 }
             }
