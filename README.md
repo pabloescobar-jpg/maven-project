@@ -1,2 +1,3 @@
 # ClickCopyChat (Paper 1.21+, Java 21)
-Build via GitHub Actions or locally with Maven.
+Dependency: **ProtocolLib.jar**
+**ProtocolLib.jar** plugin page: https://www.spigotmc.org/resources/protocollib.1997/
