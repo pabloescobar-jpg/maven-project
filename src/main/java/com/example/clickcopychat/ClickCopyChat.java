@@ -17,6 +17,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 // ProtocolLib
 import com.comphenix.protocol.PacketType;
+import com.comphenix.protocol.PacketType.Protocol;
+import com.comphenix.protocol.PacketType.Sender;
 import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.ProtocolManager;
 import com.comphenix.protocol.events.ListenerPriority;
@@ -27,12 +29,13 @@ import com.comphenix.protocol.reflect.StructureModifier;
 import com.comphenix.protocol.wrappers.WrappedChatComponent;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 public final class ClickCopyChat extends JavaPlugin implements Listener {
     private ProtocolManager protocol;
     private volatile boolean debug = false;
+    private List<PacketType> hooked = new ArrayList<>();
 
     @Override
     public void onEnable() {
@@ -47,7 +50,7 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         }
     }
 
-    // ==== Player chat (Paper renderer) =========================================
+    // === Player chat (EssentialsChat etc.) ===
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onAsyncChat(AsyncChatEvent event) {
         ChatRenderer original = event.renderer();
@@ -63,34 +66,30 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         });
     }
 
-    // ==== System/plugin messages (ProtocolLib dynamic hooks) ===================
+    // === System / plugin messages (ProtocolLib) ===
     private void registerPacketHooks() {
-        // Try all names that exist on various PL/MC combos
-        List<String> candidates = Arrays.asList(
-                "Play.Server.SYSTEM_CHAT",
-                "Play.Server.DISGUISED_CHAT",
-                "Play.Server.PLAYER_CHAT" // present on some mappings
-        );
-
-        List<PacketType> found = new ArrayList<>();
-        for (String name : candidates) {
-            for (PacketType t : PacketType.fromName(name)) {
-                found.add(t);
+        // Find all PLAY->SERVER packets whose name includes "CHAT"
+        List<PacketType> candidates = new ArrayList<>();
+        for (PacketType t : PacketType.values()) {
+            if (t.getProtocol() == Protocol.PLAY && t.getSender() == Sender.SERVER) {
+                String n = t.name().toUpperCase(Locale.ROOT);
+                if (n.contains("CHAT")) candidates.add(t);
             }
         }
 
-        if (found.isEmpty()) {
-            getLogger().warning("No chat packet types found via ProtocolLib. System/plugin messages won’t be copyable.");
+        if (candidates.isEmpty()) {
+            getLogger().warning("No SERVER chat packet types were discovered via ProtocolLib. System/plugin messages won’t be copyable.");
             return;
         }
 
-        protocol.addPacketListener(new PacketAdapter(this, ListenerPriority.NORMAL, found) {
+        hooked = candidates;
+        protocol.addPacketListener(new PacketAdapter(this, ListenerPriority.NORMAL, candidates) {
             @Override
             public void onPacketSending(PacketEvent event) {
                 PacketContainer packet = event.getPacket();
                 int touched = 0;
 
-                // 1) Adventure Component fields
+                // 1) Adventure Components
                 StructureModifier<Component> adv = packet.getModifier().withType(Component.class);
                 for (int i = 0; i < adv.size(); i++) {
                     Component c = adv.readSafely(i);
@@ -100,52 +99,48 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
                     }
                 }
 
-                // 2) WrappedChatComponent JSON fields
+                // 2) Wrapped JSON chat components
                 StructureModifier<WrappedChatComponent> wrap = packet.getModifier().withType(WrappedChatComponent.class);
                 for (int i = 0; i < wrap.size(); i++) {
                     WrappedChatComponent wc = wrap.readSafely(i);
                     if (wc != null && wc.getJson() != null) {
-                        Component c = GsonComponentSerializer.gson().deserialize(wc.getJson());
-                        Component out = decorateForce(c);
-                        String jsonOut = GsonComponentSerializer.gson().serialize(out);
-                        wrap.write(i, WrappedChatComponent.fromJson(jsonOut));
-                        touched++;
+                        Component c = safeDeserialize(wc.getJson());
+                        if (c != null) {
+                            Component out = decorateForce(c);
+                            wrap.write(i, WrappedChatComponent.fromJson(GsonComponentSerializer.gson().serialize(out)));
+                            touched++;
+                        }
                     }
                 }
 
-                // 3) Plain String fields that actually contain JSON/plain chat
-                StructureModifier<String> str = packet.getStrings();
-                for (int i = 0; i < str.size(); i++) {
-                    String s = str.readSafely(i);
+                // 3) Raw String fields (might be JSON or plain)
+                StructureModifier<String> strs = packet.getStrings();
+                for (int i = 0; i < strs.size(); i++) {
+                    String s = strs.readSafely(i);
                     if (s == null) continue;
-
-                    Component c;
-                    try {
-                        // Try to interpret as JSON first
-                        c = GsonComponentSerializer.gson().deserialize(s);
-                    } catch (Throwable ignore) {
-                        // Not JSON? treat as plain text.
-                        c = Component.text(s);
-                    }
+                    Component c = safeDeserialize(s);
+                    if (c == null) c = Component.text(s);
                     Component out = decorateForce(c);
-                    String jsonOut = GsonComponentSerializer.gson().serialize(out);
-
-                    // Many chat packets accept JSON as String; writing JSON back preserves formatting + click
-                    str.write(i, jsonOut);
+                    strs.write(i, GsonComponentSerializer.gson().serialize(out));
                     touched++;
                 }
 
                 if (debug && touched > 0) {
                     String who = (event.getPlayer() != null ? event.getPlayer().getName() : "viewer");
-                    getLogger().info("[DEBUG] " + event.getPacketType().toString() + " modified for " + who + " | fields=" + touched);
+                    getLogger().info("[DEBUG] " + event.getPacketType() + " modified for " + who + " | fields=" + touched);
                 }
             }
         });
 
-        getLogger().info("Hooked chat packet types: " + found);
+        getLogger().info("Hooked chat packet types: " + hooked);
     }
 
-    // ==== Force copy-to-clipboard on root + all children =======================
+    private Component safeDeserialize(String json) {
+        try { return GsonComponentSerializer.gson().deserialize(json); }
+        catch (Throwable ignored) { return null; }
+    }
+
+    // Force copy-to-clipboard on root + children
     private Component decorateForce(Component rendered) {
         if (rendered == null) return null;
         String plain = PlainTextComponentSerializer.plainText().serialize(rendered);
@@ -168,17 +163,25 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         return p.length() > 60 ? p.substring(0, 60) + "…" : p;
     }
 
-    // ==== Tiny debug toggle: /cccdebug ========================================
+    // Commands: /cccdebug toggles logs; /cccpackets lists hooked packet types
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (!label.equalsIgnoreCase("cccdebug")) return false;
-        if (!sender.hasPermission("clickcopychat.debug")) {
-            sender.sendMessage("No permission.");
+        if (label.equalsIgnoreCase("cccdebug")) {
+            if (!sender.hasPermission("clickcopychat.debug")) { sender.sendMessage("No permission."); return true; }
+            debug = !debug;
+            sender.sendMessage("ClickCopyChat debug: " + (debug ? "ON" : "OFF"));
+            getLogger().info("Debug now " + (debug ? "ON" : "OFF"));
             return true;
         }
-        debug = !debug;
-        sender.sendMessage("ClickCopyChat debug: " + (debug ? "ON" : "OFF"));
-        getLogger().info("Debug now " + (debug ? "ON" : "OFF") + " (toggling packet logs).");
-        return true;
+        if (label.equalsIgnoreCase("cccpackets")) {
+            if (!sender.hasPermission("clickcopychat.debug")) { sender.sendMessage("No permission."); return true; }
+            if (hooked.isEmpty()) sender.sendMessage("Hooked packets: (none)");
+            else {
+                sender.sendMessage("Hooked packets:");
+                for (PacketType t : hooked) sender.sendMessage("- " + t);
+            }
+            return true;
+        }
+        return false;
     }
 }
