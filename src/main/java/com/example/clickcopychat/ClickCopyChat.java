@@ -12,7 +12,6 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.plugin.java.JavaPlugin;
 
-// ProtocolLib
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.ProtocolManager;
@@ -22,6 +21,9 @@ import com.comphenix.protocol.events.PacketContainer;
 import com.comphenix.protocol.events.PacketEvent;
 import com.comphenix.protocol.reflect.StructureModifier;
 import com.comphenix.protocol.wrappers.WrappedChatComponent;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public final class ClickCopyChat extends JavaPlugin implements Listener {
     private ProtocolManager protocol;
@@ -38,7 +40,6 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         }
     }
 
-    // --- Player chat (renderer) ------------------------------------------------
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onAsyncChat(AsyncChatEvent event) {
         ChatRenderer original = event.renderer();
@@ -48,7 +49,6 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         });
     }
 
-    // --- System/plugin messages (ProtocolLib) ---------------------------------
     private void registerPacketHook() {
         protocol.addPacketListener(new PacketAdapter(this, ListenerPriority.NORMAL,
                 PacketType.Play.Server.SYSTEM_CHAT
@@ -57,7 +57,7 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
             public void onPacketSending(PacketEvent event) {
                 PacketContainer packet = event.getPacket();
 
-                // Try direct Adventure component first (modern Paper)
+                // Adventure Component path
                 StructureModifier<Component> adv = packet.getModifier().withType(Component.class);
                 if (!adv.getValues().isEmpty()) {
                     Component c = adv.read(0);
@@ -67,8 +67,9 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
                     }
                 }
 
-                // Fallback: JSON-based component via WrappedChatComponent
-                StructureModifier<WrappedChatComponent> wrap = packet.getModifier().withType(WrappedChatComponent.class);
+                // Wrapped JSON path
+                StructureModifier<WrappedChatComponent> wrap =
+                        packet.getModifier().withType(WrappedChatComponent.class);
                 if (!wrap.getValues().isEmpty()) {
                     WrappedChatComponent wc = wrap.read(0);
                     if (wc != null && wc.getJson() != null) {
@@ -82,7 +83,7 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         });
     }
 
-    // --- Force copy-to-clipboard on the entire line (root + all children) -----
+    // ===== FIX: no mapChildrenDeep; use recursive styling instead =====
     private Component decorateForce(Component rendered) {
         if (rendered == null) return null;
 
@@ -90,11 +91,22 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         ClickEvent click = ClickEvent.copyToClipboard(plain);
         HoverEvent<?> hover = HoverEvent.showText(Component.text("Click to copy"));
 
-        // Apply to root and recursively to all children so *anywhere* you click copies
-        Component out = rendered.clickEvent(click).hoverEvent(hover);
-        out = out.mapChildrenDeep(child -> child.clickEvent(click).hoverEvent(hover));
+        return applyDeep(rendered, click, hover);
+    }
 
-        return out;
+    private Component applyDeep(Component node, ClickEvent click, HoverEvent<?> hover) {
+        // style this node
+        Component styled = node.style(s -> s.clickEvent(click).hoverEvent(hover));
+
+        // recurse into children
+        List<Component> children = node.children();
+        if (children.isEmpty()) return styled;
+
+        List<Component> newChildren = new ArrayList<>(children.size());
+        for (Component child : children) {
+            newChildren.add(applyDeep(child, click, hover));
+        }
+        return styled.children(newChildren);
     }
 }
 
