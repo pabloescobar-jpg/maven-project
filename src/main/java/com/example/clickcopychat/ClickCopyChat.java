@@ -27,8 +27,8 @@ import com.comphenix.protocol.reflect.StructureModifier;
 import com.comphenix.protocol.wrappers.WrappedChatComponent;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public final class ClickCopyChat extends JavaPlugin implements Listener {
     private ProtocolManager protocol;
@@ -40,14 +40,14 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
 
         if (getServer().getPluginManager().isPluginEnabled("ProtocolLib")) {
             protocol = ProtocolLibrary.getProtocolManager();
-            registerPacketHook();
+            registerPacketHooks();
             getLogger().info("ProtocolLib detected: system & plugin messages will be copyable too.");
         } else {
             getLogger().warning("ProtocolLib not found: only player chat will be copyable.");
         }
     }
 
-    // === Player chat (renderer path; works with EssentialsChat, prefixes, etc.) ===
+    // ==== Player chat (Paper renderer) =========================================
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onAsyncChat(AsyncChatEvent event) {
         ChatRenderer original = event.renderer();
@@ -63,17 +63,34 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         });
     }
 
-    // === System/plugin messages (ProtocolLib packet hook) ===
-    private void registerPacketHook() {
-        protocol.addPacketListener(new PacketAdapter(this, ListenerPriority.NORMAL,
-                PacketType.Play.Server.SYSTEM_CHAT // Covers broadcasts, command outputs, Skript send/error lines, etc.
-        ) {
+    // ==== System/plugin messages (ProtocolLib dynamic hooks) ===================
+    private void registerPacketHooks() {
+        // Try all names that exist on various PL/MC combos
+        List<String> candidates = Arrays.asList(
+                "Play.Server.SYSTEM_CHAT",
+                "Play.Server.DISGUISED_CHAT",
+                "Play.Server.PLAYER_CHAT" // present on some mappings
+        );
+
+        List<PacketType> found = new ArrayList<>();
+        for (String name : candidates) {
+            for (PacketType t : PacketType.fromName(name)) {
+                found.add(t);
+            }
+        }
+
+        if (found.isEmpty()) {
+            getLogger().warning("No chat packet types found via ProtocolLib. System/plugin messages won’t be copyable.");
+            return;
+        }
+
+        protocol.addPacketListener(new PacketAdapter(this, ListenerPriority.NORMAL, found) {
             @Override
             public void onPacketSending(PacketEvent event) {
                 PacketContainer packet = event.getPacket();
-
                 int touched = 0;
-                // 1) Adventure Component fields (modern path). Touch ALL of them.
+
+                // 1) Adventure Component fields
                 StructureModifier<Component> adv = packet.getModifier().withType(Component.class);
                 for (int i = 0; i < adv.size(); i++) {
                     Component c = adv.readSafely(i);
@@ -83,7 +100,7 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
                     }
                 }
 
-                // 2) Fallback: WrappedChatComponent JSON fields (compat path). Touch ALL of them.
+                // 2) WrappedChatComponent JSON fields
                 StructureModifier<WrappedChatComponent> wrap = packet.getModifier().withType(WrappedChatComponent.class);
                 for (int i = 0; i < wrap.size(); i++) {
                     WrappedChatComponent wc = wrap.readSafely(i);
@@ -96,15 +113,39 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
                     }
                 }
 
+                // 3) Plain String fields that actually contain JSON/plain chat
+                StructureModifier<String> str = packet.getStrings();
+                for (int i = 0; i < str.size(); i++) {
+                    String s = str.readSafely(i);
+                    if (s == null) continue;
+
+                    Component c;
+                    try {
+                        // Try to interpret as JSON first
+                        c = GsonComponentSerializer.gson().deserialize(s);
+                    } catch (Throwable ignore) {
+                        // Not JSON? treat as plain text.
+                        c = Component.text(s);
+                    }
+                    Component out = decorateForce(c);
+                    String jsonOut = GsonComponentSerializer.gson().serialize(out);
+
+                    // Many chat packets accept JSON as String; writing JSON back preserves formatting + click
+                    str.write(i, jsonOut);
+                    touched++;
+                }
+
                 if (debug && touched > 0) {
                     String who = (event.getPlayer() != null ? event.getPlayer().getName() : "viewer");
-                    getLogger().info("[DEBUG] SYSTEM_CHAT modified for " + who + " | fields=" + touched);
+                    getLogger().info("[DEBUG] " + event.getPacketType().toString() + " modified for " + who + " | fields=" + touched);
                 }
             }
         });
+
+        getLogger().info("Hooked chat packet types: " + found);
     }
 
-    // === Force copy-to-clipboard on root + all children ===
+    // ==== Force copy-to-clipboard on root + all children =======================
     private Component decorateForce(Component rendered) {
         if (rendered == null) return null;
         String plain = PlainTextComponentSerializer.plainText().serialize(rendered);
@@ -118,9 +159,7 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         List<Component> children = node.children();
         if (children.isEmpty()) return styled;
         List<Component> newChildren = new ArrayList<>(children.size());
-        for (Component child : children) {
-            newChildren.add(applyDeep(child, click, hover));
-        }
+        for (Component child : children) newChildren.add(applyDeep(child, click, hover));
         return styled.children(newChildren);
     }
 
@@ -129,7 +168,7 @@ public final class ClickCopyChat extends JavaPlugin implements Listener {
         return p.length() > 60 ? p.substring(0, 60) + "…" : p;
     }
 
-    // === Tiny debug toggle: /cccdebug (permission: clickcopychat.debug) ===
+    // ==== Tiny debug toggle: /cccdebug ========================================
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!label.equalsIgnoreCase("cccdebug")) return false;
