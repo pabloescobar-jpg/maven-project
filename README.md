@@ -54,4 +54,4 @@ com/example/clickcopychat/ :
 
     - ClickCopyChat.class : Main plugin class, extends JavaPlugin. Registers listeners.
 
-    - ClickCopyChat$1.class : Inner class (probably the chat event listener) that modifies messages with click-to-copy behavior.
+    - ClickCopyChat$1.class : Inner class (the chat event listener) that modifies messages with click-to-copy behavior.
